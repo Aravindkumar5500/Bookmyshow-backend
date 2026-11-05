@@ -33,10 +33,9 @@ Set the database connection:
 
 ```env
 DB=your_mongodb_connection_string
-PORT=3000
 ```
 
-Start the API:
+Start the API (currently listens on port `8000`):
 
 ```bash
 node index.js
