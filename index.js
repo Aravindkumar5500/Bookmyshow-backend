@@ -38,7 +38,7 @@ const mongoClient = new MongoClient(DB_URL, {
 let movies;
 
 function isValidObjectId(value) {
-  return typeof value === "string" && /^[a-f\\d]{24}$/i.test(value);
+  return typeof value === "string" && /^[a-f\d]{24}$/i.test(value);
 }
 
 function toPublicMovie(movie) {
