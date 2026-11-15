@@ -33,6 +33,17 @@ The API listens on `PORT` (default `8000`). `GET /health` reports service health
 
 Booking requests validate movie/show IDs, customer details and seat count. Seat decrement uses a conditional MongoDB update so concurrent requests cannot oversell the same show in this document model. Insufficient inventory returns HTTP 409 with the latest available count. Invalid input returns HTTP 400.
 
+## Import the existing movie catalogue into a new Atlas database
+
+The repository includes a one-time importer for the sample movie catalogue in `data.json`. It converts each string `_id` into a MongoDB `ObjectId`, preserving compatibility with the API's `new ObjectId(movieId)` lookups. The source `data.json` is never modified.
+
+1. Create a local `.env` file with your new Atlas connection URI in `DB`, plus `DB_NAME=movie_db` and `COLLECTION_NAME=movies`.
+2. Install dependencies with `npm install`.
+3. Run `npm run migrate:atlas-data` from the backend repository root.
+4. The importer refuses to run if the destination collection already has documents. Confirm the reported import count before deploying.
+
+Do not commit `.env` or share the Atlas URI. The importer is intended for a fresh, empty destination collection; it does not copy historical customer bookings that are absent from `data.json`.
+
 ## Tests
 
 Run booking-request validation unit tests with:
