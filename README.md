@@ -1,50 +1,37 @@
 # Movie Booking API — Educational Prototype
 
-A small Express and MongoDB API supporting movie data retrieval and a basic seat-booking flow for the companion [Movie Booking UI](https://github.com/Aravindkumar5500/Bookmyshow-client).
+An Express and MongoDB API for the companion [Movie Booking UI](https://github.com/Aravindkumar5500/Bookmyshow-client). This independent learning project is not affiliated with BookMyShow.
 
-This is an independent educational project and is not affiliated with BookMyShow.
+## Requirements
 
-## API routes
-
-| Method | Route | Purpose |
-| --- | --- | --- |
-| GET | `/movie/get-movies` | List movie records |
-| GET | `/movie/:id` | Fetch one movie record |
-| POST | `/movie/book-movie` | Submit a basic booking request |
-
-## Tech stack
-
-- Node.js
-- Express
-- MongoDB Node.js driver
-- dotenv
-- CORS
+- Node.js 18+
+- MongoDB database containing a `movies` collection with the movie/show structure used by this project.
 
 ## Run locally
 
 ```bash
-git clone https://github.com/Aravindkumar5500/Bookmyshow-backend.git
-cd Bookmyshow-backend
 npm install
 cp .env.example .env
 ```
 
-Set the database connection:
-
-```env
-DB=your_mongodb_connection_string
-```
-
-Start the API (currently listens on port `8000`):
+Set `DB` to your MongoDB connection string. Configure `CLIENT_ORIGIN` as a comma-separated list of the exact frontend origins. Start the API:
 
 ```bash
-node index.js
+npm start
 ```
 
-## Related frontend
+The API listens on `PORT` (default `8000`). `GET /health` reports service health.
 
-- [Bookmyshow-client](https://github.com/Aravindkumar5500/Bookmyshow-client)
+## API
 
-## Production limitations
+| Method | Route | Purpose |
+| --- | --- | --- |
+| GET | `/movie/get-movies` | List movies |
+| GET | `/movie/:id` | Fetch one movie |
+| POST | `/movie/book-movie` | Book 1–10 seats |
 
-This is a learning prototype. Before production use, add transaction-safe seat inventory updates, booking ownership and authentication, input validation, payment integration, rate limiting, and restricted CORS. Do not treat the current seat decrement flow as concurrency-safe ticket inventory.
+Booking requests validate movie/show IDs, customer details and seat count. Seat decrement uses a conditional MongoDB update so concurrent requests cannot oversell the same show in this document model. Insufficient inventory returns HTTP 409 with the latest available count.
+
+## Important limitations
+
+This remains an educational booking prototype. It does not include authentication, payment processing, a payment/booking state machine, seat maps, booking expiry/hold reservations, idempotency keys or MongoDB transactions across multiple documents. For production, add those controls and configure CORS to exact trusted origins. Do not store or process payment card details in this API.
