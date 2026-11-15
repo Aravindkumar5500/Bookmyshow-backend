@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const { MongoClient, ObjectId } = require("mongodb");
+const { validateBookingRequest } = require("./lib/booking-validation");
 require("dotenv").config();
 
 const app = express();
@@ -37,15 +38,7 @@ const mongoClient = new MongoClient(DB_URL, {
 let movies;
 
 function isValidObjectId(value) {
-  return typeof value === "string" && ObjectId.isValid(value) && String(new ObjectId(value)) === value;
-}
-
-function isValidEmail(value) {
-  return typeof value === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
-
-function isValidPhone(value) {
-  return typeof value === "string" && /^[+\d][\d\s()-]{7,19}$/.test(value.trim());
+  return typeof value === "string" && ObjectId.isValid(value);
 }
 
 function findShowPath(movie, showId) {
@@ -65,10 +58,7 @@ app.get("/health", (_req, res) => {
 
 app.get("/movie/get-movies", async (_req, res) => {
   try {
-    const result = await movies.find(
-      {},
-      { projection: { bookings: 0 } }
-    ).toArray();
+    const result = await movies.find({}, { projection: { bookings: 0 } }).toArray();
     res.json(result);
   } catch (error) {
     console.error("Error fetching movies:", error);
@@ -93,27 +83,14 @@ app.get("/movie/:id", async (req, res) => {
 });
 
 app.post("/movie/book-movie", async (req, res) => {
-  const { movieId, showId, seats, name, email, phoneNumber } = req.body || {};
+  const bookingRequest = req.body || {};
+  const validationError = validateBookingRequest(bookingRequest);
+  if (validationError) {
+    return res.status(400).json({ message: validationError });
+  }
 
-  if (!isValidObjectId(movieId)) {
-    return res.status(400).json({ message: "A valid movie ID is required." });
-  }
-  if (typeof showId !== "string" || !showId.trim()) {
-    return res.status(400).json({ message: "A valid show is required." });
-  }
+  const { movieId, showId, seats, name, email, phoneNumber } = bookingRequest;
   const requestedSeats = Number(seats);
-  if (!Number.isSafeInteger(requestedSeats) || requestedSeats < 1 || requestedSeats > 10) {
-    return res.status(400).json({ message: "Choose between 1 and 10 seats." });
-  }
-  if (typeof name !== "string" || name.trim().length < 2 || name.trim().length > 100) {
-    return res.status(400).json({ message: "Enter a valid name (2–100 characters)." });
-  }
-  if (!isValidEmail(email)) {
-    return res.status(400).json({ message: "Enter a valid email address." });
-  }
-  if (!isValidPhone(phoneNumber)) {
-    return res.status(400).json({ message: "Enter a valid phone number." });
-  }
 
   try {
     const movieObjectId = new ObjectId(movieId);
@@ -127,8 +104,6 @@ app.post("/movie/book-movie", async (req, res) => {
     if (!located) return res.status(404).json({ message: "Show not found." });
 
     // Conditional update makes the seat check and decrement one atomic operation.
-    // The current data model stores shows in date-keyed arrays, so target the exact
-    // array element using its stable show ID and require enough seats in the filter.
     const showPath = `shows.${located.date}.${located.index}`;
     const updateResult = await movies.updateOne(
       {
@@ -196,9 +171,7 @@ async function startServer() {
   try {
     await mongoClient.connect();
     movies = mongoClient.db(DB_NAME).collection(COLLECTION_NAME);
-    app.listen(PORT, () => {
-      console.log(`Movie API listening on port ${PORT}`);
-    });
+    app.listen(PORT, () => console.log(`Movie API listening on port ${PORT}`));
   } catch (error) {
     console.error("Unable to connect to MongoDB:", error);
     process.exit(1);
