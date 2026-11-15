@@ -1,154 +1,209 @@
 const express = require("express");
-const app = express();
 const cors = require("cors");
 const { MongoClient, ObjectId } = require("mongodb");
-const dotenv = require("dotenv").config();
-const URL = process.env.DB;
+const { validateBookingRequest } = require("./lib/booking-validation");
+require("dotenv").config();
 
-const DB_NAME = "movie_db";
-const COLLECTION_NAME = "movies";
-app.use(
-  cors({
-    origin: "*",
-  })
-);
-app.use(express.json());
+const app = express();
+const PORT = Number(process.env.PORT) || 8000;
+const DB_NAME = process.env.DB_NAME || "movie_db";
+const COLLECTION_NAME = process.env.COLLECTION_NAME || "movies";
+const DB_URL = process.env.DB;
 
-// Fetching Movies
-app.get("/movie/get-movies", async (req, res) => {
+if (!DB_URL) {
+  throw new Error("Missing DB environment variable. Set DB in your .env file.");
+}
+
+const allowedOrigins = (process.env.CLIENT_ORIGIN || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin(origin, callback) {
+    // Allow non-browser clients and local development. Configure CLIENT_ORIGIN in production.
+    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error("Origin not allowed by CORS"));
+  },
+}));
+app.use(express.json({ limit: "100kb" }));
+
+const mongoClient = new MongoClient(DB_URL, {
+  maxPoolSize: 10,
+  serverSelectionTimeoutMS: 10000,
+});
+
+let movies;
+
+function isValidObjectId(value) {
+  return typeof value === "string" && /^[a-f\d]{24}$/i.test(value);
+}
+
+function toPublicMovie(movie) {
+  const publicMovie = { ...movie };
+  if (publicMovie.shows && typeof publicMovie.shows === "object") {
+    publicMovie.shows = Object.fromEntries(
+      Object.entries(publicMovie.shows).map(([date, shows]) => [
+        date,
+        Array.isArray(shows)
+          ? shows.map((show) => {
+              if (!show || typeof show !== "object") return show;
+              const { bookings, ...publicShow } = show;
+              return publicShow;
+            })
+          : shows,
+      ])
+    );
+  }
+  return publicMovie;
+}
+
+function findShowPath(movie, showId) {
+  if (!movie.shows || typeof movie.shows !== "object") return null;
+
+  for (const [date, shows] of Object.entries(movie.shows)) {
+    if (!Array.isArray(shows)) continue;
+    const index = shows.findIndex((show) => show && show.id === showId);
+    if (index !== -1) return { date, index, show: shows[index] };
+  }
+  return null;
+}
+
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok" });
+});
+
+app.get("/movie/get-movies", async (_req, res) => {
   try {
-    // Ensure to await the connection
-    const client = await new MongoClient(URL).connect();
-    let db = client.db(DB_NAME);
-    let collection = db.collection(COLLECTION_NAME);
-
-    let movies = await collection.find({}).toArray();
-    client.close(); // Ensure to close the connection
-
-    res.json(movies);
+    const result = await movies.find({}).toArray();
+    res.json(result.map(toPublicMovie));
   } catch (error) {
-    console.log("Error fetching movies:", error);
-    res.status(500).json({ message: "Something went wrong" });
+    console.error("Error fetching movies:", error);
+    res.status(500).json({ message: "Unable to load movies right now." });
   }
 });
 
-// Fetch Movie Details by ID
 app.get("/movie/:id", async (req, res) => {
+  const { id } = req.params;
+  if (!isValidObjectId(id)) {
+    return res.status(400).json({ message: "Invalid movie ID." });
+  }
+
   try {
-    const id = req.params.id;
-
-    // Ensure to await the connection
-    const client = await new MongoClient(URL).connect();
-    let db = client.db(DB_NAME);
-    let dbcollection = db.collection(COLLECTION_NAME);
-
-    let movie = await dbcollection.findOne({ _id: new ObjectId(id) });
-    client.close(); // Ensure to close the connection
-
-    if (!movie) {
-      return res.status(404).json({ message: "Movie not found" });
-    }
-
-    res.json(movie);
+    const movie = await movies.findOne({ _id: new ObjectId(id) });
+    if (!movie) return res.status(404).json({ message: "Movie not found." });
+    res.json(toPublicMovie(movie));
   } catch (error) {
-    console.log("Error fetching movie by ID:", error);
-    res.status(500).json({ message: "Something went wrong" });
+    console.error("Error fetching movie:", error);
+    res.status(500).json({ message: "Unable to load movie details right now." });
   }
 });
 
-// Booking Tickets
 app.post("/movie/book-movie", async (req, res) => {
-  let bookingRequest = req.body;
-
-  if (
-    !bookingRequest.movieId ||
-    !bookingRequest.showId ||
-    !bookingRequest.seats ||
-    !bookingRequest.name ||
-    !bookingRequest.email ||
-    !bookingRequest.phoneNumber
-  ) {
-    return res.status(401).json({ message: "Some fields are missing" });
+  const bookingRequest = req.body || {};
+  const validationError = validateBookingRequest(bookingRequest);
+  if (validationError) {
+    return res.status(400).json({ message: validationError });
   }
-  let requestedSeat = parseInt(bookingRequest.seats);
 
-  if (isNaN(requestedSeat) || requestedSeat <= 0) {
-    return res.status(401).json({ message: "Invalid seat count" });
-  }
+  const { movieId, showId, seats, name, email, phoneNumber } = bookingRequest;
+  const requestedSeats = Number(seats);
 
   try {
-    // Ensure to await the connection
-    const client = await new MongoClient(URL).connect();
-    let db = client.db(DB_NAME);
-    let dbcollection = db.collection(COLLECTION_NAME);
-
-    let movie = await dbcollection.findOne({
-      _id: new ObjectId(bookingRequest.movieId),
-    });
-
-    if (!movie) {
-      client.close();
-      return res.status(404).json({ message: "Requested movie not found" });
-    }
-
-    const show = Object.values(movie.shows)
-      .flat()
-      .find((s) => s.id === bookingRequest.showId);
-
-    if (!show) {
-      client.close();
-      return res.status(404).json({ message: "Show not found" });
-    }
-
-    if (parseInt(show.seats) < requestedSeat) {
-      client.close();
-      return res.status(404).json({ message: "Not enough seats available" });
-    }
-
-    const updateSeats = parseInt(show.seats) - requestedSeat;
-
-    const date = Object.keys(movie.shows).find((d) =>
-      movie.shows[d].some((s) => s.id === bookingRequest.showId)
+    const movieObjectId = new ObjectId(movieId);
+    const movie = await movies.findOne(
+      { _id: movieObjectId },
+      { projection: { shows: 1, title: 1 } }
     );
+    if (!movie) return res.status(404).json({ message: "Movie not found." });
 
-    const showIndex = movie.shows[date].findIndex(
-      (s) => s.id === bookingRequest.showId
-    );
+    const located = findShowPath(movie, showId);
+    if (!located) return res.status(404).json({ message: "Show not found." });
 
-    const userBooking = {
-      name: bookingRequest.name,
-      email: bookingRequest.email,
-      phoneNumber: bookingRequest.phoneNumber,
-      seats: bookingRequest.seats,
-    };
-
-    const updatedResult = await dbcollection.updateOne(
+    // Conditional update makes the seat check and decrement one atomic operation.
+    const showPath = `shows.${located.date}.${located.index}`;
+    const updateResult = await movies.updateOne(
       {
-        _id: new ObjectId(bookingRequest.movieId),
+        _id: movieObjectId,
+        [`${showPath}.id`]: showId,
+        [`${showPath}.seats`]: { $gte: requestedSeats },
       },
       {
-        $set: {
-          [`shows.${date}.${showIndex}.seats`]: updateSeats,
-        },
+        $inc: { [`${showPath}.seats`]: -requestedSeats },
         $push: {
-          [`shows.${date}.${showIndex}.bookings`]: userBooking,
+          [`${showPath}.bookings`]: {
+            bookingId: new ObjectId().toString(),
+            name: name.trim(),
+            email: email.trim().toLowerCase(),
+            phoneNumber: phoneNumber.trim(),
+            seats: requestedSeats,
+            createdAt: new Date(),
+          },
         },
       }
     );
 
-    client.close(); // Ensure to close the connection
-
-    if (updatedResult.modifiedCount === 0) {
-      return res.status(500).json({ message: "Failed to update booking" });
+    if (updateResult.modifiedCount !== 1) {
+      const latestMovie = await movies.findOne(
+        { _id: movieObjectId },
+        { projection: { shows: 1 } }
+      );
+      const latestShow = latestMovie && findShowPath(latestMovie, showId);
+      if (!latestShow) return res.status(404).json({ message: "Show not found." });
+      return res.status(409).json({
+        message: `Only ${Number(latestShow.show.seats) || 0} seats are currently available.`,
+        availableSeats: Number(latestShow.show.seats) || 0,
+      });
     }
 
-    return res.status(200).json({ message: "Booking created successfully" });
+    return res.status(201).json({
+      message: "Booking created successfully.",
+      booking: {
+        movieId,
+        showId,
+        movieTitle: movie.title,
+        showDate: located.date,
+        showTime: located.show.time,
+        seats: requestedSeats,
+      },
+    });
   } catch (error) {
-    console.log("Error during booking:", error);
-    return res.status(500).json({ message: "Something went wrong" });
+    console.error("Error creating booking:", error);
+    return res.status(500).json({ message: "Unable to complete your booking. Please try again." });
   }
 });
 
-app.listen(8000, () => {
-  console.log("Server is running on port 8000");
+app.use((error, _req, res, _next) => {
+  if (error && error.type === "entity.parse.failed") {
+    return res.status(400).json({ message: "Request body must contain valid JSON." });
+  }
+  if (error && error.message === "Origin not allowed by CORS") {
+    return res.status(403).json({ message: "This origin is not allowed." });
+  }
+  console.error("Unhandled API error:", error);
+  return res.status(500).json({ message: "An unexpected server error occurred." });
 });
+
+async function startServer() {
+  try {
+    await mongoClient.connect();
+    movies = mongoClient.db(DB_NAME).collection(COLLECTION_NAME);
+    app.listen(PORT, () => console.log(`Movie API listening on port ${PORT}`));
+  } catch (error) {
+    console.error("Unable to connect to MongoDB:", error);
+    process.exit(1);
+  }
+}
+
+async function shutdown(signal) {
+  console.log(`${signal} received. Closing MongoDB connection.`);
+  await mongoClient.close();
+  process.exit(0);
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+startServer();
