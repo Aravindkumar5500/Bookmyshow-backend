@@ -38,7 +38,26 @@ const mongoClient = new MongoClient(DB_URL, {
 let movies;
 
 function isValidObjectId(value) {
-  return typeof value === "string" && ObjectId.isValid(value);
+  return typeof value === "string" && /^[a-f\\d]{24}$/i.test(value);
+}
+
+function toPublicMovie(movie) {
+  const publicMovie = { ...movie };
+  if (publicMovie.shows && typeof publicMovie.shows === "object") {
+    publicMovie.shows = Object.fromEntries(
+      Object.entries(publicMovie.shows).map(([date, shows]) => [
+        date,
+        Array.isArray(shows)
+          ? shows.map((show) => {
+              if (!show || typeof show !== "object") return show;
+              const { bookings, ...publicShow } = show;
+              return publicShow;
+            })
+          : shows,
+      ])
+    );
+  }
+  return publicMovie;
 }
 
 function findShowPath(movie, showId) {
@@ -58,8 +77,8 @@ app.get("/health", (_req, res) => {
 
 app.get("/movie/get-movies", async (_req, res) => {
   try {
-    const result = await movies.find({}, { projection: { bookings: 0 } }).toArray();
-    res.json(result);
+    const result = await movies.find({}).toArray();
+    res.json(result.map(toPublicMovie));
   } catch (error) {
     console.error("Error fetching movies:", error);
     res.status(500).json({ message: "Unable to load movies right now." });
@@ -75,7 +94,7 @@ app.get("/movie/:id", async (req, res) => {
   try {
     const movie = await movies.findOne({ _id: new ObjectId(id) });
     if (!movie) return res.status(404).json({ message: "Movie not found." });
-    res.json(movie);
+    res.json(toPublicMovie(movie));
   } catch (error) {
     console.error("Error fetching movie:", error);
     res.status(500).json({ message: "Unable to load movie details right now." });
